@@ -3,21 +3,16 @@ import time
 import json
 import asyncio
 import textwrap
+import requests
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 from google import genai
 from google.genai import types
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
-# 1. Load & Verify Environment Variables
+# 1. Load Environment Variables
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-YOUTUBE_CLIENT_ID = os.environ["YOUTUBE_CLIENT_ID"]
-YOUTUBE_CLIENT_SECRET = os.environ["YOUTUBE_CLIENT_SECRET"]
-YOUTUBE_REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
+MAKE_WEBHOOK_URL = os.environ["MAKE_WEBHOOK_URL"]
 
 
 def generate_script():
@@ -113,135 +108,4 @@ def draw_stickman_frame(caption, pose, output_path):
 
     # Eyes & Expression
     if pose == "shocked":
-        draw.ellipse([cx - 32, head_y - 22, cx - 12, head_y - 2], fill=line_color)
-        draw.ellipse([cx + 12, head_y - 22, cx + 32, head_y - 2], fill=line_color)
-        draw.ellipse([cx - 18, head_y + 15, cx + 18, head_y + 48], outline=accent_color, width=8)
-    elif pose == "thinking":
-        draw.ellipse([cx - 30, head_y - 20, cx - 14, head_y - 4], fill=line_color)
-        draw.ellipse([cx + 14, head_y - 20, cx + 30, head_y - 4], fill=line_color)
-        draw.line([cx - 20, head_y + 28, cx + 22, head_y + 22], fill=line_color, width=8)
-        try:
-            q_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 90)
-        except OSError:
-            q_font = ImageFont.load_default()
-        draw.text((cx + 105, head_y - 110), "?", fill=accent_color, font=q_font)
-    else:
-        draw.ellipse([cx - 30, head_y - 18, cx - 14, head_y - 2], fill=line_color)
-        draw.ellipse([cx + 14, head_y - 18, cx + 30, head_y - 2], fill=line_color)
-        draw.arc([cx - 28, head_y + 5, cx + 28, head_y + 42], start=15, end=165, fill=line_color, width=8)
-
-    # Torso
-    draw.line([cx, neck_y, cx, hip_y], fill=line_color, width=stroke)
-
-    # Arms based on pose
-    shoulder_y = neck_y + 45
-    if pose == "celebrating":
-        draw.line([cx, shoulder_y, cx - 130, shoulder_y - 130], fill=line_color, width=stroke)
-        draw.line([cx, shoulder_y, cx + 130, shoulder_y - 130], fill=line_color, width=stroke)
-    elif pose == "thinking":
-        draw.line([cx, shoulder_y, cx - 110, shoulder_y + 110], fill=line_color, width=stroke)
-        draw.line([cx, shoulder_y, cx + 95, shoulder_y + 30], fill=line_color, width=stroke)
-        draw.line([cx + 95, shoulder_y + 30, cx + 35, head_y + 55], fill=line_color, width=stroke)
-    elif pose == "shocked":
-        draw.line([cx, shoulder_y, cx - 120, head_y - 10], fill=line_color, width=stroke)
-        draw.line([cx, shoulder_y, cx + 120, head_y - 10], fill=line_color, width=stroke)
-    else:  # explaining
-        draw.line([cx, shoulder_y, cx - 135, shoulder_y + 60], fill=line_color, width=stroke)
-        draw.line([cx, shoulder_y, cx + 145, shoulder_y - 50], fill=line_color, width=stroke)
-
-    # Legs
-    draw.line([cx, hip_y, cx - 95, hip_y + 230], fill=line_color, width=stroke)
-    draw.line([cx, hip_y, cx + 95, hip_y + 230], fill=line_color, width=stroke)
-
-    # Ground line
-    draw.line([cx - 260, hip_y + 235, cx + 260, hip_y + 235], fill=(90, 95, 120), width=8)
-
-    # Top Caption Text
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 72)
-    except OSError:
-        font = ImageFont.load_default()
-
-    wrapped_lines = textwrap.wrap(caption.upper(), width=18)
-    text_y = 320
-    for line in wrapped_lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        text_w = bbox[2] - bbox[0]
-        draw.text(((width - text_w) // 2, text_y), line, fill=accent_color, font=font)
-        text_y += 95
-
-    img.save(output_path)
-
-
-def build_video(script_data, output_video="short.mp4"):
-    print("Rendering audio and stickman scenes...")
-    clips = []
-
-    for idx, scene in enumerate(script_data["scenes"]):
-        audio_path = f"scene_{idx}.mp3"
-        img_path = f"scene_{idx}.png"
-
-        asyncio.run(generate_voiceover(scene["narration"], audio_path))
-        draw_stickman_frame(scene["caption"], scene.get("pose", "explaining"), img_path)
-
-        audio_clip = AudioFileClip(audio_path)
-        duration = audio_clip.duration + 0.25
-
-        img_clip = ImageClip(img_path).set_duration(duration).set_audio(audio_clip)
-        clips.append(img_clip)
-
-    final_video = concatenate_videoclips(clips, method="compose")
-    final_video.write_videofile(
-        output_video,
-        fps=24,
-        codec="libx264",
-        audio_codec="aac",
-        preset="ultrafast",
-        threads=4,
-    )
-    return output_video
-
-
-def upload_to_youtube(video_path, title, description):
-    print("Authenticating and uploading to YouTube...")
-    creds = Credentials(
-        token=None,
-        refresh_token=YOUTUBE_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=YOUTUBE_CLIENT_ID,
-        client_secret=YOUTUBE_CLIENT_SECRET,
-        scopes=["https://www.googleapis.com/auth/youtube.upload"],
-    )
-    creds.refresh(Request())
-
-    youtube = build("youtube", "v3", credentials=creds)
-
-    body = {
-        "snippet": {
-            "title": title[:95],
-            "description": description,
-            "tags": ["Shorts", "Facts", "Animation", "Stickman"],
-            "categoryId": "27",  # Education
-        },
-        "status": {
-            "privacyStatus": "public",
-            "selfDeclaredMadeForKids": False,
-        },
-    }
-
-    media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/mp4")
-    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
-
-    response = None
-    while response is None:
-        status, response = request.next_chunk()
-        if status:
-            print(f"Upload progress: {int(status.progress() * 100)}%")
-
-    print(f"Upload complete! Video ID: {response['id']}")
-
-
-if __name__ == "__main__":
-    data = generate_script()
-    video_file = build_video(data)
-    upload_to_youtube(video_file, data["title"], data["description"])
+        draw.ellipse([cx - 32, head_y - 22, cx - 12, head_y - 2
