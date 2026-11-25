@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import asyncio
 import textwrap
@@ -52,15 +53,33 @@ def generate_script():
     Valid values for "pose" are strictly: "thinking", "explaining", "celebrating", "shocked".
     """
 
-    response = client.models.generate_content(
-        model="gemini-3.5-flash-lite",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.8,
-        ),
-    )
-    return json.loads(response.text)
+    models_to_try = [
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.8-flash",
+    ]
+
+    for attempt, model_name in enumerate(models_to_try, start=1):
+        try:
+            print(f"Attempt {attempt} using {model_name}...")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.8,
+                ),
+            )
+            return json.loads(response.text)
+        except Exception as e:
+            print(f"Attempt {attempt} failed ({e}).")
+            if attempt < len(models_to_try):
+                wait_seconds = attempt * 15
+                print(f"Waiting {wait_seconds} seconds before retrying...")
+                time.sleep(wait_seconds)
+            else:
+                raise RuntimeError("All Gemini retry attempts failed due to server load.")
 
 
 async def generate_voiceover(text, output_path):
@@ -101,7 +120,6 @@ def draw_stickman_frame(caption, pose, output_path):
         draw.ellipse([cx - 30, head_y - 20, cx - 14, head_y - 4], fill=line_color)
         draw.ellipse([cx + 14, head_y - 20, cx + 30, head_y - 4], fill=line_color)
         draw.line([cx - 20, head_y + 28, cx + 22, head_y + 22], fill=line_color, width=8)
-        # Question mark near head
         try:
             q_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 90)
         except OSError:
