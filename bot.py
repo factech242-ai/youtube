@@ -3,13 +3,18 @@ import json
 import time
 import asyncio
 import subprocess
-import requests
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
 from google import genai
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-ZAPIER_WEBHOOK_URL = os.environ["ZAPIER_WEBHOOK_URL"]
+YOUTUBE_CLIENT_ID = os.environ["YOUTUBE_CLIENT_ID"]
+YOUTUBE_CLIENT_SECRET = os.environ["YOUTUBE_CLIENT_SECRET"]
+YOUTUBE_REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -58,34 +63,24 @@ def draw_stickman_frame(narration, image_path):
     img = Image.new("RGB", (width, height), color=(18, 20, 28))
     draw = ImageDraw.Draw(img)
 
-    # Subtle accent border
     draw.rectangle([40, 40, width - 40, height - 40], outline=(0, 210, 255), width=6)
 
-    # Draw Stickman character in upper-middle area
     cx, head_y = 540, 460
-    # Head
     draw.ellipse([cx - 75, head_y - 75, cx + 75, head_y + 75], outline=(255, 255, 255), width=10)
-    # Eyes
     draw.ellipse([cx - 32, head_y - 20, cx - 16, head_y - 4], fill=(0, 210, 255))
     draw.ellipse([cx + 16, head_y - 20, cx + 32, head_y - 4], fill=(0, 210, 255))
-    # Smile
     draw.arc([cx - 30, head_y - 5, cx + 30, head_y + 35], start=15, end=165, fill=(255, 255, 255), width=6)
-    # Body
     draw.line([cx, head_y + 75, cx, head_y + 310], fill=(255, 255, 255), width=10)
-    # Arms (pointing/explaining pose)
     draw.line([cx, head_y + 130, cx - 130, head_y + 230], fill=(255, 255, 255), width=10)
     draw.line([cx, head_y + 130, cx + 140, head_y + 80], fill=(255, 255, 255), width=10)
-    # Legs
     draw.line([cx, head_y + 310, cx - 95, head_y + 490], fill=(255, 255, 255), width=10)
     draw.line([cx, head_y + 310, cx + 95, head_y + 490], fill=(255, 255, 255), width=10)
 
-    # Load font
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
     except Exception:
         font = ImageFont.load_default()
 
-    # Wrap narration text cleanly onto frame
     words = narration.split()
     lines, current_line = [], []
     for word in words:
@@ -124,17 +119,37 @@ def render_video(image_path, audio_path, video_path):
     subprocess.run(cmd, check=True)
 
 
-def send_to_zapier(title, description, video_path):
-    print("Sending video to Zapier webhook...")
-    with open(video_path, "rb") as f:
-        response = requests.post(
-            ZAPIER_WEBHOOK_URL,
-            data={"title": title, "description": description},
-            files={"video": ("short.mp4", f, "video/mp4")},
-            timeout=120,
-        )
-    print("Zapier status:", response.status_code, response.text)
-    response.raise_for_status()
+def upload_to_youtube(title, description, video_path):
+    print("Authenticating with YouTube Data API v3...")
+    creds = Credentials(
+        token=None,
+        refresh_token=YOUTUBE_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=YOUTUBE_CLIENT_ID,
+        client_secret=YOUTUBE_CLIENT_SECRET,
+        scopes=["https://www.googleapis.com/auth/youtube.upload"],
+    )
+    creds.refresh(Request())
+    youtube = build("youtube", "v3", credentials=creds)
+
+    body = {
+        "snippet": {
+            "title": title[:100],
+            "description": description,
+            "categoryId": "27",
+        },
+        "status": {
+            "privacyStatus": "public",
+            "selfDeclaredMadeForKids": False,
+        },
+    }
+
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/mp4")
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
+    print("Uploading video directly to YouTube...")
+    response = request.execute()
+    print(f"Uploaded successfully! Video ID: {response['id']}")
 
 
 def main():
@@ -147,8 +162,7 @@ def main():
     asyncio.run(create_voiceover(narration, "voice.mp3"))
     draw_stickman_frame(narration, "frame.png")
     render_video("frame.png", "voice.mp3", "short.mp4")
-    send_to_zapier(title, description, "short.mp4")
-    print("Done! Short sent to Zapier successfully.")
+    upload_to_youtube(title, description, "short.mp4")
 
 
 if __name__ == "__main__":
