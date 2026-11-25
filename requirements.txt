@@ -1,4 +1,4 @@
-google genai
-edge tts
+google-genai
+edge-tts
 pillow
 requests
