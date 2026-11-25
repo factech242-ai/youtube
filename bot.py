@@ -18,7 +18,7 @@ Return ONLY valid JSON (no markdown backticks):
   ]
 }
 """
-res = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+res = client.models.generate_content(model="gemini-3.5-flash-lite", contents=prompt)
 data = json.loads(res.text.strip().removeprefix("```json").removesuffix("```").strip())
 
 async def build_scenes():
