@@ -1,0 +1,4 @@
+google gen ai
+edge tts
+pillow
+requests
