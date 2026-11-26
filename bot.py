@@ -156,12 +156,17 @@ def build_video(script_data, output_mp4="short.mp4"):
 
 
 def upload_to_github_repo(video_path):
-    """Pushes short.mp4 straight to your GitHub repo and returns the direct raw MP4 CDN link."""
+    """Pushes short.mp4 to GitHub and verifies the raw CDN serves real MP4 bytes."""
     api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/short.mp4"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
     }
+
+    # Get default branch name cleanly
+    repo_res = requests.get(f"https://api.github.com/repos/{GITHUB_REPOSITORY}", headers=headers, timeout=30)
+    repo_res.raise_for_status()
+    default_branch = repo_res.json().get("default_branch", "main")
 
     sha = None
     get_res = requests.get(api_url, headers=headers, timeout=30)
@@ -174,6 +179,7 @@ def upload_to_github_repo(video_path):
     data = {
         "message": "Update generated Short MP4",
         "content": encoded,
+        "branch": default_branch,
     }
     if sha:
         data["sha"] = sha
@@ -181,10 +187,21 @@ def upload_to_github_repo(video_path):
     put_res = requests.put(api_url, headers=headers, json=data, timeout=60)
     put_res.raise_for_status()
 
-    branch = put_res.json()["content"].get("url", "").split("ref=")[-1] or "main"
-    raw_mp4_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/{branch}/short.mp4"
+    # Use commit-specific SHA URL so GitHub CDN never serves stale cache
+    commit_sha = put_res.json()["commit"]["sha"]
+    raw_mp4_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/{commit_sha}/short.mp4"
     print("Direct GitHub Raw MP4 URL:", raw_mp4_url)
-    return raw_mp4_url
+
+    # Verify the URL returns HTTP 200 and real video bytes before triggering Make.com
+    for _ in range(5):
+        check = requests.head(raw_mp4_url, timeout=15)
+        size = int(check.headers.get("Content-Length", 0))
+        print(f"CDN check -> Status: {check.status_code}, Size: {size} bytes")
+        if check.status_code == 200 and size > 10000:
+            return raw_mp4_url
+        time.sleep(3)
+
+    raise RuntimeError(f"GitHub Raw CDN did not return a valid MP4: {raw_mp4_url}")
 
 
 def run_pipeline():
