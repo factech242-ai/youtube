@@ -3,8 +3,10 @@ name: Auto Stickman YouTube Shorts
 on:
   workflow_dispatch:
   schedule:
-    # Runs twice daily (06:00 UTC and 18:00 UTC)
     - cron: '0 6,18 * * *'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -29,8 +31,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install google-generativeai edge-tts moviepy==1.0.3 Pillow requests
 
-      - name: Generate and send Short to Make.com
+      - name: Generate Short and send GitHub link to Make.com
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: python bot.py
