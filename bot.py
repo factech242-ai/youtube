@@ -10,7 +10,6 @@ from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 from google import genai
 from google.genai import types
 
-# 1. Load Environment Variables
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 MAKE_WEBHOOK_URL = os.environ["MAKE_WEBHOOK_URL"]
 
@@ -87,10 +86,8 @@ def draw_stickman_frame(caption, pose, output_path):
     img = Image.new("RGB", (width, height), color=(18, 18, 24))
     draw = ImageDraw.Draw(img)
 
-    # Subtle accent border
     draw.rectangle([30, 30, width - 30, height - 30], outline=(60, 65, 85), width=6)
 
-    # Stickman coordinates (centered lower-middle)
     cx, head_y = width // 2, 920
     head_r = 75
     neck_y = head_y + head_r
@@ -99,14 +96,116 @@ def draw_stickman_frame(caption, pose, output_path):
     accent_color = (255, 215, 0)
     stroke = 14
 
-    # Head
     draw.ellipse(
         [cx - head_r, head_y - head_r, cx + head_r, head_y + head_r],
         outline=line_color,
         width=stroke,
     )
 
-    # Eyes & Expression
-   if pose == "shocked":
-    draw.ellipse([cx - 32, head_y - 22, cx - 12, head_y - 2], fill=line_color)
-    draw.ellipse([cx + 12, head_y - 22, cx + 32, head_y - 2], fill=line_color)
+    if pose == "shocked":
+        draw.ellipse([cx - 32, head_y - 22, cx - 12, head_y - 2], fill=line_color)
+        draw.ellipse([cx + 12, head_y - 22, cx + 32, head_y - 2], fill=line_color)
+        draw.ellipse([cx - 18, head_y + 15, cx + 18, head_y + 48], outline=accent_color, width=8)
+    elif pose == "thinking":
+        draw.ellipse([cx - 30, head_y - 20, cx - 14, head_y - 4], fill=line_color)
+        draw.ellipse([cx + 14, head_y - 20, cx + 30, head_y - 4], fill=line_color)
+        draw.line([cx - 20, head_y + 28, cx + 22, head_y + 22], fill=line_color, width=8)
+        try:
+            q_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 90)
+        except OSError:
+            q_font = ImageFont.load_default()
+        draw.text((cx + 105, head_y - 110), "?", fill=accent_color, font=q_font)
+    else:
+        draw.ellipse([cx - 30, head_y - 18, cx - 14, head_y - 2], fill=line_color)
+        draw.ellipse([cx + 14, head_y - 18, cx + 30, head_y - 2], fill=line_color)
+        draw.arc([cx - 28, head_y + 5, cx + 28, head_y + 42], start=15, end=165, fill=line_color, width=8)
+
+    draw.line([cx, neck_y, cx, hip_y], fill=line_color, width=stroke)
+
+    shoulder_y = neck_y + 45
+    if pose == "celebrating":
+        draw.line([cx, shoulder_y, cx - 130, shoulder_y - 130], fill=line_color, width=stroke)
+        draw.line([cx, shoulder_y, cx + 130, shoulder_y - 130], fill=line_color, width=stroke)
+    elif pose == "thinking":
+        draw.line([cx, shoulder_y, cx - 110, shoulder_y + 110], fill=line_color, width=stroke)
+        draw.line([cx, shoulder_y, cx + 95, shoulder_y + 30], fill=line_color, width=stroke)
+        draw.line([cx + 95, shoulder_y + 30, cx + 35, head_y + 55], fill=line_color, width=stroke)
+    elif pose == "shocked":
+        draw.line([cx, shoulder_y, cx - 120, head_y - 10], fill=line_color, width=stroke)
+        draw.line([cx, shoulder_y, cx + 120, head_y - 10], fill=line_color, width=stroke)
+    else:
+        draw.line([cx, shoulder_y, cx - 135, shoulder_y + 60], fill=line_color, width=stroke)
+        draw.line([cx, shoulder_y, cx + 145, shoulder_y - 50], fill=line_color, width=stroke)
+
+    draw.line([cx, hip_y, cx - 95, hip_y + 230], fill=line_color, width=stroke)
+    draw.line([cx, hip_y, cx + 95, hip_y + 230], fill=line_color, width=stroke)
+    draw.line([cx - 260, hip_y + 235, cx + 260, hip_y + 235], fill=(90, 95, 120), width=8)
+
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 72)
+    except OSError:
+        font = ImageFont.load_default()
+
+    wrapped_lines = textwrap.wrap(caption.upper(), width=18)
+    text_y = 320
+    for line in wrapped_lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        text_w = bbox[2] - bbox[0]
+        draw.text(((width - text_w) // 2, text_y), line, fill=accent_color, font=font)
+        text_y += 95
+
+    img.save(output_path)
+
+
+def build_video(script_data, output_video="short.mp4"):
+    print("Rendering audio and stickman scenes...")
+    clips = []
+
+    for idx, scene in enumerate(script_data["scenes"]):
+        audio_path = f"scene_{idx}.mp3"
+        img_path = f"scene_{idx}.png"
+
+        asyncio.run(generate_voiceover(scene["narration"], audio_path))
+        draw_stickman_frame(scene["caption"], scene.get("pose", "explaining"), img_path)
+
+        audio_clip = AudioFileClip(audio_path)
+        duration = audio_clip.duration + 0.25
+
+        img_clip = ImageClip(img_path).set_duration(duration).set_audio(audio_clip)
+        clips.append(img_clip)
+
+    final_video = concatenate_videoclips(clips, method="compose")
+    final_video.write_videofile(
+        output_video,
+        fps=24,
+        codec="libx264",
+        audio_codec="aac",
+        preset="ultrafast",
+        threads=4,
+    )
+    return output_video
+
+
+def send_to_make(video_path, title, description):
+    print("Uploading video to temporary host...")
+    with open(video_path, "rb") as f:
+        res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f})
+    res.raise_for_status()
+    raw_url = res.json()["data"]["url"]
+    direct_url = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+
+    print("Triggering Make.com webhook...")
+    payload = {
+        "video_url": direct_url,
+        "title": title[:95],
+        "description": description,
+    }
+    hook_res = requests.post(MAKE_WEBHOOK_URL, json=payload)
+    hook_res.raise_for_status()
+    print("Sent to Make.com successfully!")
+
+
+if __name__ == "__main__":
+    data = generate_script()
+    video_file = build_video(data)
+    send_to_make(video_file, data["title"], data["description"])
