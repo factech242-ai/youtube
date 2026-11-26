@@ -107,5 +107,6 @@ def draw_stickman_frame(caption, pose, output_path):
     )
 
     # Eyes & Expression
-    if pose == "shocked":
-        draw.ellipse([cx - 32, head_y - 22, cx - 12, head_y - 2
+   if pose == "shocked":
+    draw.ellipse([cx - 32, head_y - 22, cx - 12, head_y - 2], fill=line_color)
+    draw.ellipse([cx + 12, head_y - 22, cx + 32, head_y - 2], fill=line_color)
