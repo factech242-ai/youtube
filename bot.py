@@ -148,7 +148,7 @@ def build_video(script_data, output_mp4="short.mp4"):
         fps=24,
         codec="libx264",
         audio_codec="aac",
-        pixel_format="yuv420p",
+        ffmpeg_params=["-pix_fmt", "yuv420p"],
         preset="ultrafast",
         threads=2,
     )
@@ -163,7 +163,6 @@ def upload_to_github_repo(video_path):
         "Accept": "application/vnd.github+json",
     }
 
-    # Check if short.mp4 already exists to get its SHA for overwriting
     sha = None
     get_res = requests.get(api_url, headers=headers, timeout=30)
     if get_res.status_code == 200:
@@ -204,6 +203,7 @@ def run_pipeline():
             hook_res = requests.post(MAKE_WEBHOOK_URL, json=payload, timeout=30)
             print("Make.com status:", hook_res.status_code, hook_res.text)
             hook_res.raise_for_status()
+            print("SUCCESS! Everything completed cleanly.")
             return
         except Exception as e:
             print(f"Run {run_attempt} failed: {e}")
