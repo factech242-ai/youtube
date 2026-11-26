@@ -1,5 +1,7 @@
 import os
+import time
 import json
+import base64
 import asyncio
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -7,15 +9,15 @@ import edge_tts
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 import google.generativeai as genai
 
-# 1. Load GitHub Secrets
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 MAKE_WEBHOOK_URL = os.environ["MAKE_WEBHOOK_URL"]
+GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+GITHUB_REPOSITORY = os.environ["GITHUB_REPOSITORY"]
 
 genai.configure(api_key=GEMINI_API_KEY)
 
 
 def generate_script():
-    """Generates a viral psychology/facts YouTube Short script via Gemini."""
     prompt = (
         "Write a fast-paced, punchy 35-second YouTube Short script about a mind-blowing "
         "psychological fact or human behavior secret. Break it into 5 short scenes.\n"
@@ -33,43 +35,36 @@ def generate_script():
         "}"
     )
 
-    response = None
-    for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            break
-        except Exception as e:
-            print(f"Model {model_name} failed: {e}")
+    for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash"]:
+        model = genai.GenerativeModel(model_name)
+        for attempt in range(1, 4):
+            try:
+                print(f"Trying {model_name} (attempt {attempt}/3)...")
+                response = model.generate_content(prompt, request_options={"timeout": 60})
+                raw = response.text.strip()
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                return json.loads(raw.strip())
+            except Exception as e:
+                print(f"{model_name} attempt {attempt} failed: {e}")
+                time.sleep(attempt * 5)
 
-    if response is None:
-        raise RuntimeError("All Gemini models failed to generate a script.")
-
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return json.loads(raw.strip())
+    raise RuntimeError("All Gemini models failed.")
 
 
 def draw_stickman_frame(caption, pose, out_path):
-    """Draws a clean 1080x1920 vertical stickman frame."""
     W, H = 1080, 1920
     img = Image.new("RGB", (W, H), color=(18, 18, 24))
     draw = ImageDraw.Draw(img)
 
-    # Subtle accent border
     draw.rectangle([30, 30, W - 30, H - 30], outline=(70, 130, 255), width=6)
 
-    # Stickman coordinates (centered)
     cx, head_y = W // 2, 760
     r = 85
-
-    # Head
     draw.ellipse([cx - r, head_y - r, cx + r, head_y + r], outline=(255, 255, 255), width=12)
 
-    # Eyes & expression
     if pose == "shock":
         draw.ellipse([cx - 35, head_y - 25, cx - 15, head_y - 5], fill=(255, 255, 255))
         draw.ellipse([cx + 15, head_y - 25, cx + 35, head_y - 5], fill=(255, 255, 255))
@@ -79,12 +74,10 @@ def draw_stickman_frame(caption, pose, out_path):
         draw.ellipse([cx + 18, head_y - 20, cx + 32, head_y - 6], fill=(255, 255, 255))
         draw.arc([cx - 30, head_y + 5, cx + 30, head_y + 42], start=15, end=165, fill=(255, 255, 255), width=7)
 
-    # Torso
     neck_y = head_y + r
     hip_y = neck_y + 270
     draw.line([cx, neck_y, cx, hip_y], fill=(255, 255, 255), width=12)
 
-    # Arms based on pose
     shoulder_y = neck_y + 60
     if pose == "point":
         draw.line([cx, shoulder_y, cx - 140, shoulder_y + 120], fill=(255, 255, 255), width=12)
@@ -96,17 +89,14 @@ def draw_stickman_frame(caption, pose, out_path):
     elif pose == "idea":
         draw.line([cx, shoulder_y, cx - 160, shoulder_y - 110], fill=(255, 255, 255), width=12)
         draw.line([cx, shoulder_y, cx + 160, shoulder_y - 110], fill=(255, 255, 255), width=12)
-        # Lightbulb circle above head
         draw.ellipse([cx - 35, head_y - 210, cx + 35, head_y - 140], outline=(255, 220, 60), width=8)
     else:
         draw.line([cx, shoulder_y, cx - 150, shoulder_y + 130], fill=(255, 255, 255), width=12)
         draw.line([cx, shoulder_y, cx + 150, shoulder_y + 130], fill=(255, 255, 255), width=12)
 
-    # Legs
     draw.line([cx, hip_y, cx - 110, hip_y + 240], fill=(255, 255, 255), width=12)
     draw.line([cx, hip_y, cx + 110, hip_y + 240], fill=(255, 255, 255), width=12)
 
-    # Bold caption at top
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64)
     except Exception:
@@ -158,34 +148,70 @@ def build_video(script_data, output_mp4="short.mp4"):
         fps=24,
         codec="libx264",
         audio_codec="aac",
+        pixel_format="yuv420p",
         preset="ultrafast",
         threads=2,
     )
     return output_mp4
 
 
-def upload_and_trigger_make(video_path, title, description):
-    """Uploads MP4 to tmpfiles.org, forces direct /dl/ link, and triggers Make.com."""
-    with open(video_path, "rb") as f:
-        res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=60)
-    res.raise_for_status()
-    raw_url = res.json()["data"]["url"]
-
-    # Convert webpage URL to direct binary MP4 download URL
-    direct_mp4_url = raw_url.replace("http://", "https://").replace("tmpfiles.org/", "tmpfiles.org/dl/")
-    print("Direct MP4 URL:", direct_mp4_url)
-
-    payload = {
-        "video_url": direct_mp4_url,
-        "title": title[:95],
-        "description": description[:4900],
+def upload_to_github_repo(video_path):
+    """Pushes short.mp4 straight to your GitHub repo and returns the direct raw MP4 CDN link."""
+    api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/short.mp4"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
     }
-    hook_res = requests.post(MAKE_WEBHOOK_URL, json=payload, timeout=30)
-    print("Make.com status:", hook_res.status_code, hook_res.text)
-    hook_res.raise_for_status()
+
+    # Check if short.mp4 already exists to get its SHA for overwriting
+    sha = None
+    get_res = requests.get(api_url, headers=headers, timeout=30)
+    if get_res.status_code == 200:
+        sha = get_res.json().get("sha")
+
+    with open(video_path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode("utf-8")
+
+    data = {
+        "message": "Update generated Short MP4",
+        "content": encoded,
+    }
+    if sha:
+        data["sha"] = sha
+
+    put_res = requests.put(api_url, headers=headers, json=data, timeout=60)
+    put_res.raise_for_status()
+
+    branch = put_res.json()["content"].get("url", "").split("ref=")[-1] or "main"
+    raw_mp4_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/{branch}/short.mp4"
+    print("Direct GitHub Raw MP4 URL:", raw_mp4_url)
+    return raw_mp4_url
+
+
+def run_pipeline():
+    for run_attempt in range(1, 4):
+        try:
+            print(f"=== Pipeline Run {run_attempt}/3 ===")
+            data = generate_script()
+            mp4 = build_video(data, "short.mp4")
+            direct_url = upload_to_github_repo(mp4)
+
+            payload = {
+                "video_url": direct_url,
+                "title": data["title"][:95],
+                "description": data["description"][:4900],
+            }
+            hook_res = requests.post(MAKE_WEBHOOK_URL, json=payload, timeout=30)
+            print("Make.com status:", hook_res.status_code, hook_res.text)
+            hook_res.raise_for_status()
+            return
+        except Exception as e:
+            print(f"Run {run_attempt} failed: {e}")
+            if run_attempt < 3:
+                time.sleep(15)
+            else:
+                raise
 
 
 if __name__ == "__main__":
-    data = generate_script()
-    mp4 = build_video(data, "short.mp4")
-    upload_and_trigger_make(mp4, data["title"], data["description"])
+    run_pipeline()
