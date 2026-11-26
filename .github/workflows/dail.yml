@@ -1,9 +1,10 @@
-name: Auto YouTube Shorts
+name: Auto Stickman YouTube Shorts
 
 on:
-  schedule:
-    - cron: '30 12 * * *'
   workflow_dispatch:
+  schedule:
+    # Runs twice daily (06:00 UTC and 18:00 UTC)
+    - cron: '0 6,18 * * *'
 
 jobs:
   build:
@@ -16,7 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install system dependencies
         run: |
@@ -25,10 +26,10 @@ jobs:
 
       - name: Install Python packages
         run: |
-          pip install --upgrade pip
-          pip install google-genai edge-tts Pillow moviepy==1.0.3 requests
+          python -m pip install --upgrade pip
+          pip install google-generativeai edge-tts moviepy==1.0.3 Pillow requests
 
-      - name: Generate video and send to Make
+      - name: Generate and send Short to Make.com
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
