@@ -1,7 +1,6 @@
 import os
 import json
 import asyncio
-import random
 import requests
 from PIL import Image, ImageDraw, ImageFont
 import edge_tts
@@ -17,7 +16,6 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 def generate_script():
     """Generates a viral psychology/facts YouTube Short script via Gemini."""
-    model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = (
         "Write a fast-paced, punchy 35-second YouTube Short script about a mind-blowing "
         "psychological fact or human behavior secret. Break it into 5 short scenes.\n"
@@ -34,7 +32,19 @@ def generate_script():
         "  ]\n"
         "}"
     )
-    response = model.generate_content(prompt)
+
+    response = None
+    for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            break
+        except Exception as e:
+            print(f"Model {model_name} failed: {e}")
+
+    if response is None:
+        raise RuntimeError("All Gemini models failed to generate a script.")
+
     raw = response.text.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
